@@ -10,6 +10,7 @@
  */
 #include <stdio.h>
 #include <sys/time.h>
+#include <time.h>
 #include "ftimer.h"
 
 /* function prototypes */
@@ -34,22 +35,32 @@ double ftimer_itimer(ftimer_test_funct f, void *argp, int n)
 }
 
 /* 
- * ftimer_gettod - Use gettimeofday to estimate the running time of
- * f(argp). Return the average of n runs.  
+ * ftimer_gettod - Estimate the running time of f(argp) and return the
+ * average of n runs.
+ *
+ * NOTE: this used to time the loop with gettimeofday().  That clock is not
+ * monotonic, so NTP, a virtual machine host, or WSL2 stepping it backwards
+ * in the middle of a measurement produced a NEGATIVE elapsed time, and a
+ * negative time is subtracted from the total in mdriver.c: the driver then
+ * reported e.g. -0.146755 s and -82 Kops for a trace that really took
+ * +0.066586 s, which inflated the performance index from 70 to 84.
+ * CLOCK_MONOTONIC never runs backwards, so we measure with that instead.
+ * The function keeps its historical name; fsecs.c still selects it through
+ * the USE_GETTOD flag in config.h.
  */
 double ftimer_gettod(ftimer_test_funct f, void *argp, int n)
 {
     int i;
-    struct timeval stv, etv;
-    double diff;
+    struct timespec sts, ets;
+    double elapsed;
 
-    gettimeofday(&stv, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &sts);
     for (i = 0; i < n; i++) 
 	f(argp);
-    gettimeofday(&etv,NULL);
-    diff = 1E3*(etv.tv_sec - stv.tv_sec) + 1E-3*(etv.tv_usec-stv.tv_usec);
-    diff /= n;
-    return (1E-3*diff);
+    clock_gettime(CLOCK_MONOTONIC, &ets);
+
+    elapsed = (ets.tv_sec - sts.tv_sec) + 1E-9*(ets.tv_nsec - sts.tv_nsec);
+    return elapsed / n;
 }
 
 

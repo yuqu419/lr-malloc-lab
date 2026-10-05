@@ -35,7 +35,7 @@ void init_fsecs(void)
 	printf("Measuring performance with the interval timer.\n");
 #elif USE_GETTOD
     if (verbose)
-	printf("Measuring performance with gettimeofday().\n");
+	printf("Measuring performance with a monotonic clock.\n");
 #endif
 }
 
