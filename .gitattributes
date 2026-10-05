@@ -1,0 +1,4 @@
+# Everything is a text file with LF line endings, unless noted otherwise.
+# (Without this, cloning on Windows can turn the traces/*.rep files into CRLF
+# and mdriver's trace parser will misread them.)
+* text=auto eol=lf
