@@ -170,7 +170,7 @@ void *mm_malloc(size_t size) {
             take_away_free_list(cur);
             return cur + 1;
         } else if (REAL_SIZE(cur) > size + sizeof(mm_chunk) &&
-                   !NOT_FREE(cur) + 24) {
+                   !NOT_FREE(cur)) {
             return split(cur, size);
         }
         cur = cur->fnext;
