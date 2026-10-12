@@ -6,11 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-// it occupys 24 bytes
+// it occupys 40 bytes
 typedef struct mm_chunk {
     size_t size; // The low 3 bits work as flag
     struct mm_chunk *pre;
     struct mm_chunk *next;
+    struct mm_chunk *fpre;
+    struct mm_chunk *fnext;
 } mm_chunk;
 /* double word (8) alignment */
 #define ALIGNMENT 8
@@ -28,6 +30,10 @@ static mm_chunk *head;
 static mm_chunk *tail;
 // initialize the head to ensure the head is not null
 // 0 stands for free,1 stands for not free
+
+static void take_away_free_list(mm_chunk *chunk);
+static void put_into_free_list(mm_chunk *chunk);
+static void *extend_memory(size_t size);
 int mm_init(void) {
     head = mem_sbrk(sizeof(mm_chunk));
     if (head == (void *)-1)
@@ -35,8 +41,10 @@ int mm_init(void) {
     tail = mem_sbrk(sizeof(mm_chunk));
     if (tail == (void *)-1)
         return -1;
-    *tail = (mm_chunk){.next = NULL, .pre = head, .size = 0 | 1};
-    *head = (mm_chunk){.next = tail, .pre = NULL, .size = 0 | 1};
+    *tail = (mm_chunk){
+        .next = NULL, .pre = head, .fpre = head, .fnext = NULL, .size = 0 | 1};
+    *head = (mm_chunk){
+        .next = tail, .pre = NULL, .fpre = NULL, .fnext = tail, .size = 0 | 1};
     return 0;
 }
 // it receive the size aligned
@@ -48,14 +56,20 @@ static void *extend_memory(size_t size) {
     if (res == (void *)-1)
         return NULL;
     mm_chunk *new_tail = (mm_chunk *)((char *)res + size);
-    *new_tail = (mm_chunk){.next = NULL, .pre = tail, .size = 0 | 1};
+    *new_tail = (mm_chunk){.next = NULL,
+                           .pre = tail,
+                           .size = 0 | 1,
+                           .fnext = NULL,
+                           .fpre = tail->fpre};
+    if (new_tail->fpre)
+        new_tail->fpre->fnext = new_tail;
     *tail = (mm_chunk){.next = new_tail, .pre = tail->pre, .size = size | 1};
     tail = new_tail;
     return tail->pre + 1;
 }
 // it receive the size aligned
 //  you should ensure that chunk is free and it can contain the size and a new
-//  chunk
+//  chunk.Necessarily,chunk must be in free list
 static void *split(mm_chunk *chunk, size_t size) {
     mm_chunk *new_chunk = (mm_chunk *)((char *)(chunk + 1) + size);
     mm_chunk *next_chunk = chunk->next;
@@ -63,42 +77,67 @@ static void *split(mm_chunk *chunk, size_t size) {
         next_chunk->pre = new_chunk;
     chunk->next = new_chunk;
     size_t remaining_size = REAL_SIZE(chunk) - sizeof(mm_chunk) - size;
-    *new_chunk =
-        (mm_chunk){.pre = chunk, .next = next_chunk, .size = remaining_size};
+    *new_chunk = (mm_chunk){.pre = chunk,
+                            .next = next_chunk,
+                            .size = remaining_size,
+                            .fnext = chunk->fnext,
+                            .fpre = chunk->fpre};
+    if (chunk->fpre)
+        chunk->fpre->fnext = new_chunk;
+    if (chunk->fnext)
+        chunk->fnext->fpre = new_chunk;
     chunk->size = size | 1;
     return chunk + 1;
 }
 // return the merged free chunk
 static inline void *merge_front(mm_chunk *chunk) {
-    while (!NOT_FREE(chunk)) {
+    while (!NOT_FREE(chunk->pre)) {
         mm_chunk *pre_chunk = chunk->pre;
         mm_chunk *next_chunk = chunk->next;
-
         if (pre_chunk && !NOT_FREE(pre_chunk)) {
-            *pre_chunk = (mm_chunk){.size = REAL_SIZE(pre_chunk) +
-                                            REAL_SIZE(chunk) + sizeof(mm_chunk),
-                                    .next = next_chunk,
-                                    .pre = pre_chunk->pre};
+            take_away_free_list(pre_chunk);
+            *pre_chunk = (mm_chunk){
+                .size =
+                    REAL_SIZE(pre_chunk) + REAL_SIZE(chunk) + sizeof(mm_chunk),
+                .next = next_chunk,
+                .pre = pre_chunk->pre,
+            };
             next_chunk->pre = pre_chunk;
         }
         chunk = pre_chunk;
     }
-    return chunk->pre;
+    return chunk;
 }
 // return the merged free chunk
 static inline void *merge_back(mm_chunk *chunk) {
     mm_chunk *next_chunk = chunk->next;
     while (next_chunk && !NOT_FREE(next_chunk)) {
+        take_away_free_list(next_chunk);
         mm_chunk *grand_next_chunk = next_chunk->next;
         *chunk = (mm_chunk){.next = grand_next_chunk,
                             .pre = chunk->pre,
                             .size = REAL_SIZE(chunk) + REAL_SIZE(next_chunk) +
-                                    sizeof(mm_chunk)};
+                                    sizeof(mm_chunk),
+                            .fpre = chunk->fpre};
         if (grand_next_chunk)
             grand_next_chunk->pre = chunk;
         next_chunk = grand_next_chunk;
     }
     return chunk;
+}
+static void put_into_free_list(mm_chunk *chunk) {
+    mm_chunk *next_free_chunk = head->fnext;
+    head->fnext = chunk;
+    chunk->fnext = next_free_chunk;
+    chunk->fpre = head;
+    if (next_free_chunk)
+        next_free_chunk->fpre = chunk;
+}
+static void take_away_free_list(mm_chunk *chunk) {
+    if (chunk->fnext)
+        chunk->fnext->fpre = chunk->fpre;
+    if (chunk->fpre)
+        chunk->fpre->fnext = chunk->fnext;
 }
 void *mm_malloc(size_t size) {
     size = ALIGN(size);
@@ -114,18 +153,20 @@ void *mm_malloc(size_t size) {
     //  ,we can place it into the playload of this chunk
     // situation 3:the size is larger than size + sizeof(chunk),without doubt,we
     // should split it to smaller pieces.
-    mm_chunk *cur = head;
+    mm_chunk *cur = head->fnext;
     while (cur) {
         if (REAL_SIZE(cur) >= size &&
             REAL_SIZE(cur) <= size + sizeof(mm_chunk) && !NOT_FREE(cur)) {
             cur->size = REAL_SIZE(cur) | 1;
+            take_away_free_list(cur);
             return cur + 1;
-        } else if (REAL_SIZE(cur) > size + sizeof(mm_chunk) + 512 &&
+        } else if (REAL_SIZE(cur) > size + sizeof(mm_chunk) &&
                    !NOT_FREE(cur)) {
             return split(cur, size);
         }
-        cur = cur->next;
+        cur = cur->fnext;
     }
+
     // extend the memory directly
     return extend_memory(size);
 }
@@ -135,13 +176,18 @@ void mm_free(void *ptr) {
         return;
     mm_chunk *chunk = ((mm_chunk *)ptr) - 1;
     chunk->size = REAL_SIZE(chunk);
-    // merge the back chunks
-    merge_back(chunk);
-    // merge the front chunks
-    merge_front(chunk);
+    chunk = merge_back(chunk);
+    chunk = merge_front(chunk);
+    put_into_free_list(chunk);
 }
 
 void *mm_realloc(void *ptr, size_t size) {
+    if (!ptr)
+        return mm_malloc(size);
+    if (size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
     size = ALIGN(size);
     mm_chunk *chunk = ((mm_chunk *)ptr) - 1;
 
@@ -149,7 +195,10 @@ void *mm_realloc(void *ptr, size_t size) {
     if (REAL_SIZE(chunk) >= size) {
         return ptr;
     }
-    if (next_chunk && !NOT_FREE(next_chunk) && REAL_SIZE(next_chunk) + sizeof(mm_chunk) + REAL_SIZE(chunk) >= size + 24) {
+    if (next_chunk && !NOT_FREE(next_chunk) &&
+        REAL_SIZE(next_chunk) + sizeof(mm_chunk) + REAL_SIZE(chunk) >=
+            size + 24) {
+        take_away_free_list(next_chunk);
         *chunk = (mm_chunk){.size = (REAL_SIZE(chunk) + REAL_SIZE(next_chunk) +
                                      sizeof(mm_chunk)) |
                                     1,
@@ -160,12 +209,16 @@ void *mm_realloc(void *ptr, size_t size) {
     }
     if (REAL_SIZE(chunk) >= size) {
         if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
+            put_into_free_list(chunk);
             ptr = split(chunk, size);
         }
         return ptr;
     }
     mm_chunk *pre_chunk = chunk->pre;
-    if (pre_chunk && !NOT_FREE(pre_chunk) && REAL_SIZE(pre_chunk) + sizeof(mm_chunk) + REAL_SIZE(chunk) >= size + 1024) {
+    if (pre_chunk && !NOT_FREE(pre_chunk) &&
+        REAL_SIZE(pre_chunk) + sizeof(mm_chunk) + REAL_SIZE(chunk) >=
+            size + 1024) {
+        take_away_free_list(pre_chunk);
         mm_chunk *next_chunk = chunk->next;
         size_t chunk_size = REAL_SIZE(chunk);
         memmove(pre_chunk + 1, chunk + 1, chunk_size);
@@ -173,6 +226,7 @@ void *mm_realloc(void *ptr, size_t size) {
             .size = (REAL_SIZE(pre_chunk) + chunk_size + sizeof(mm_chunk)) | 1,
             .next = next_chunk,
             .pre = pre_chunk->pre};
+
         if (next_chunk)
             next_chunk->pre = pre_chunk;
         chunk = pre_chunk;
@@ -180,6 +234,7 @@ void *mm_realloc(void *ptr, size_t size) {
     }
     if (REAL_SIZE(chunk) >= size) {
         if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
+            put_into_free_list(chunk);
             ptr = split(chunk, size);
         }
         return ptr;
@@ -191,7 +246,13 @@ void *mm_realloc(void *ptr, size_t size) {
         if (res == (void *)-1)
             return NULL;
         tail = (mm_chunk *)((char *)mem_heap_hi() + 1) - 1;
-        *tail = (mm_chunk){.next = NULL, .pre = chunk, .size = 0 | 1};
+        *tail = (mm_chunk){.next = NULL,
+                           .pre = chunk,
+                           .size = 0 | 1,
+                           .fnext = NULL,
+                           .fpre = chunk->next->fpre};
+        if (chunk->next->fpre)
+            chunk->next->fpre->fnext = tail;
         *chunk = (mm_chunk){.next = tail, .pre = chunk->pre, .size = size | 1};
         return chunk + 1;
     }
