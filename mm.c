@@ -113,15 +113,14 @@ void *mm_malloc(size_t size) {
     // smaller than size + sizeof(chunk)
     //  ,we can place it into the playload of this chunk
     // situation 3:the size is larger than size + sizeof(chunk),without doubt,we
-    // should split
-    //  it to smaller pieces.
+    // should split it to smaller pieces.
     mm_chunk *cur = head;
     while (cur) {
         if (REAL_SIZE(cur) >= size &&
             REAL_SIZE(cur) <= size + sizeof(mm_chunk) && !NOT_FREE(cur)) {
             cur->size = REAL_SIZE(cur) | 1;
             return cur + 1;
-        } else if (REAL_SIZE(cur) > size + sizeof(mm_chunk) * 3 &&
+        } else if (REAL_SIZE(cur) > size + sizeof(mm_chunk) + 512 &&
                    !NOT_FREE(cur)) {
             return split(cur, size);
         }
@@ -150,7 +149,7 @@ void *mm_realloc(void *ptr, size_t size) {
     if (REAL_SIZE(chunk) >= size) {
         return ptr;
     }
-    if (next_chunk && !NOT_FREE(next_chunk)) {
+    if (next_chunk && !NOT_FREE(next_chunk) && REAL_SIZE(next_chunk) + sizeof(mm_chunk) + REAL_SIZE(chunk) >= size + 24) {
         *chunk = (mm_chunk){.size = (REAL_SIZE(chunk) + REAL_SIZE(next_chunk) +
                                      sizeof(mm_chunk)) |
                                     1,
@@ -160,31 +159,31 @@ void *mm_realloc(void *ptr, size_t size) {
             next_chunk->next->pre = chunk;
     }
     if (REAL_SIZE(chunk) >= size) {
-        // if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
-        //     ptr = split(chunk, size);
-        // }
+        if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
+            ptr = split(chunk, size);
+        }
         return ptr;
     }
-    // mm_chunk *pre_chunk = chunk->pre;
-    // if (pre_chunk && !NOT_FREE(pre_chunk) && REAL_SIZE(pre_chunk) + sizeof(mm_chunk) + REAL_SIZE(chunk) >= size) {
-    //     mm_chunk *next_chunk = chunk->next;
-    //     size_t chunk_size = REAL_SIZE(chunk);
-    //     memmove(pre_chunk + 1, chunk + 1, chunk_size);
-    //     *pre_chunk = (mm_chunk){
-    //         .size = (REAL_SIZE(pre_chunk) + chunk_size + sizeof(mm_chunk)) | 1,
-    //         .next = next_chunk,
-    //         .pre = pre_chunk->pre};
-    //     if (next_chunk)
-    //         next_chunk->pre = pre_chunk;
-    //     chunk = pre_chunk;
-    //     ptr = chunk + 1;
-    // }
-    // if (REAL_SIZE(chunk) >= size) {
-    //     if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
-    //         ptr = split(chunk, size);
-    //     }
-    //     return ptr;
-    // }
+    mm_chunk *pre_chunk = chunk->pre;
+    if (pre_chunk && !NOT_FREE(pre_chunk) && REAL_SIZE(pre_chunk) + sizeof(mm_chunk) + REAL_SIZE(chunk) >= size + 1024) {
+        mm_chunk *next_chunk = chunk->next;
+        size_t chunk_size = REAL_SIZE(chunk);
+        memmove(pre_chunk + 1, chunk + 1, chunk_size);
+        *pre_chunk = (mm_chunk){
+            .size = (REAL_SIZE(pre_chunk) + chunk_size + sizeof(mm_chunk)) | 1,
+            .next = next_chunk,
+            .pre = pre_chunk->pre};
+        if (next_chunk)
+            next_chunk->pre = pre_chunk;
+        chunk = pre_chunk;
+        ptr = chunk + 1;
+    }
+    if (REAL_SIZE(chunk) >= size) {
+        if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
+            ptr = split(chunk, size);
+        }
+        return ptr;
+    }
     if (chunk->next == tail) {
         size_t new_size = size - REAL_SIZE(chunk);
         // When I call mem_sbrk(incr),it will return the first byte of chunk
