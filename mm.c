@@ -243,10 +243,6 @@ void *mm_realloc(void *ptr, size_t size) {
     //     ptr = chunk + 1;
     // }
     // if (REAL_SIZE(chunk) >= size) {
-    //     if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
-    //         put_into_free_list(chunk);
-    //         ptr = split(chunk, size);
-    //     }
     //     return ptr;
     // }
     if (chunk->next == tail) {
