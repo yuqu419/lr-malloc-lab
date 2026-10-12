@@ -15,7 +15,6 @@ typedef struct mm_chunk {
 } mm_chunk;
 /* double word (8) alignment */
 #define ALIGNMENT 8
-#define PADDING 1024
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
 
@@ -206,7 +205,7 @@ void *mm_realloc(void *ptr, size_t size) {
     }
     if (next_chunk && !NOT_FREE(next_chunk) &&
         REAL_SIZE(next_chunk) + sizeof(mm_chunk) + REAL_SIZE(chunk) >=
-            size + 24) {
+            size) {
         take_away_free_list(next_chunk);
         *chunk = (mm_chunk){.size = (REAL_SIZE(chunk) + REAL_SIZE(next_chunk) +
                                      sizeof(mm_chunk)) |
@@ -217,39 +216,39 @@ void *mm_realloc(void *ptr, size_t size) {
             next_chunk->next->pre = chunk;
     }
     if (REAL_SIZE(chunk) >= size) {
-        if (REAL_SIZE(chunk) > size + sizeof(mm_chunk) + PADDING) {
+        if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
             put_into_free_list(chunk);
             ptr = split(chunk, size);
         }
         return ptr;
     }
-    mm_chunk *pre_chunk = chunk->pre;
-    if (pre_chunk && !NOT_FREE(pre_chunk) &&
-        REAL_SIZE(pre_chunk) + REAL_SIZE(chunk) >= size + PADDING) {
+    // mm_chunk *pre_chunk = chunk->pre;
+    // if (pre_chunk && !NOT_FREE(pre_chunk) &&
+    //     REAL_SIZE(pre_chunk) + REAL_SIZE(chunk) + sizeof(mm_chunk)>= size) {
 
-        take_away_free_list(pre_chunk);
-        mm_chunk *next_chunk = chunk->next;
-        size_t payload_size = REAL_SIZE(chunk) - sizeof(mm_chunk);
-        memmove(pre_chunk + 1, chunk + 1, payload_size);
+    //     take_away_free_list(pre_chunk);
+    //     mm_chunk *next_chunk = chunk->next;
+    //     size_t payload_size = REAL_SIZE(chunk);
+    //     memmove(pre_chunk + 1, chunk + 1, payload_size);
 
-        *pre_chunk =
-            (mm_chunk){.size = (REAL_SIZE(pre_chunk) + REAL_SIZE(chunk)) | 1,
-                       .next = next_chunk,
-                       .pre = pre_chunk->pre};
+    //     *pre_chunk =
+    //         (mm_chunk){.size = (REAL_SIZE(pre_chunk) + payload_size + sizeof(mm_chunk)) | 1,
+    //                    .next = next_chunk,
+    //                    .pre = pre_chunk->pre};
 
-        if (next_chunk)
-            next_chunk->pre = pre_chunk;
+    //     if (next_chunk)
+    //         next_chunk->pre = pre_chunk;
 
-        chunk = pre_chunk;
-        ptr = chunk + 1;
-    }
-    if (REAL_SIZE(chunk) >= size) {
-        if (REAL_SIZE(chunk) > size + sizeof(mm_chunk) + PADDING) {
-            put_into_free_list(chunk);
-            ptr = split(chunk, size);
-        }
-        return ptr;
-    }
+    //     chunk = pre_chunk;
+    //     ptr = chunk + 1;
+    // }
+    // if (REAL_SIZE(chunk) >= size) {
+    //     if (REAL_SIZE(chunk) > size + sizeof(mm_chunk)) {
+    //         put_into_free_list(chunk);
+    //         ptr = split(chunk, size);
+    //     }
+    //     return ptr;
+    // }
     if (chunk->next == tail) {
         size_t new_size = size - REAL_SIZE(chunk);
         // When I call mem_sbrk(incr),it will return the first byte of chunk
